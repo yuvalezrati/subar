@@ -1,0 +1,6 @@
+# Build output (release downloads are published on GitHub Releases, not committed)
+dist/
+build/
+
+# macOS
+.DS_Store
