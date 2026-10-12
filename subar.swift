@@ -12,8 +12,8 @@
 // Settings (units, thresholds, menu bar style) live in
 // ~/Library/Application Support/Subar/config.json and are re-read on every refresh.
 //
-// Build the downloadable app:  ./build-app.sh   (makes dist/Subar.app and dist/Subar-<version>.pkg)
-// Developer build + run:       ./install.sh
+// Build the downloadable app:  ./scripts/build-app.sh   (makes dist/Subar.app and dist/Subar-<version>.pkg)
+// Developer build + run:       ./scripts/dev-install.sh
 // Requires macOS 12+. No dependencies beyond macOS itself.
 
 import AppKit
@@ -752,7 +752,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         refresh()
     }
 
-    // MARK: Open at Login (the downloadable .app only; install.sh uses a LaunchAgent instead)
+    // MARK: Open at Login (the downloadable .app only; dev-install.sh uses a LaunchAgent instead)
 
     private var isAppBundle: Bool { Bundle.main.bundleIdentifier != nil }
 

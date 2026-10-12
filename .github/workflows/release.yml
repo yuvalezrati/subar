@@ -16,14 +16,14 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build
-        run: VERSION="${GITHUB_REF_NAME#v}" ./build-app.sh
+        run: VERSION="${GITHUB_REF_NAME#v}" ./scripts/build-app.sh
 
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           version="${GITHUB_REF_NAME#v}"
-          # A copy without the version in its name, so get-subar.sh can always fetch the latest
+          # A copy without the version in its name, so scripts/get-subar.sh can always fetch the latest
           cp "dist/Subar-$version.zip" dist/Subar.zip
           gh release create "$GITHUB_REF_NAME" \
             "dist/Subar-$version.pkg" "dist/Subar-$version.zip" dist/Subar.zip \

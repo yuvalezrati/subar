@@ -1,7 +1,7 @@
 #!/bin/bash
 # Installs the latest Subar release into Applications and opens it:
 #
-#   curl -fsSL https://raw.githubusercontent.com/yuvalezrati/subar/main/get-subar.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/yuvalezrati/subar/main/scripts/get-subar.sh | bash
 #
 # Run it again any time to update. You stay signed in.
 set -euo pipefail

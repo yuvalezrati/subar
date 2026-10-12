@@ -3,10 +3,10 @@
 #   first run   -> builds, installs, starts at login, opens the Dexcom sign-in panel
 #   later runs  -> rebuilds and restarts the running app in place
 #
-#   ./install.sh             build + install/update
-#   ./install.sh uninstall   stop it and remove the app (settings and Keychain item are kept)
+#   ./scripts/dev-install.sh             build + install/update
+#   ./scripts/dev-install.sh uninstall   stop it and remove the app (settings and Keychain item are kept)
 set -euo pipefail
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 
 LABEL="local.subar"
 BIN_DIR="$HOME/Applications/Subar"

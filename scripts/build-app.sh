@@ -6,16 +6,16 @@
 #   dist/Subar.app             the app itself
 #
 # Usage:
-#   ./build-app.sh                                  unsigned build (fine for friends; see README)
-#   VERSION=1.1.0 ./build-app.sh                    set the version number
+#   ./scripts/build-app.sh                                  unsigned build (fine for friends; see README)
+#   VERSION=1.1.0 ./scripts/build-app.sh                    set the version number
 #
 # Optional, with an Apple Developer account, so people get no security warning:
 #   DEVELOPER_ID="Developer ID Application: Your Name (TEAMID)" \
 #   INSTALLER_ID="Developer ID Installer: Your Name (TEAMID)" \
-#   NOTARY_PROFILE="subar-notary" ./build-app.sh
+#   NOTARY_PROFILE="subar-notary" ./scripts/build-app.sh
 #   (create the profile once with: xcrun notarytool store-credentials subar-notary)
 set -euo pipefail
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 
 VERSION="${VERSION:-1.0.0}"
 BUNDLE_ID="${BUNDLE_ID:-io.github.yuvalezrati.subar}"
