@@ -1,12 +1,31 @@
+<div align="center">
+
+<img src="docs/icon.png" width="120" alt="Subar icon">
+
 # Subar
 
-Your Dexcom glucose in the macOS menu bar.
+**Your Dexcom glucose in the macOS menu bar.**
+
+[![Latest release](https://img.shields.io/github/v/release/yuvalezrati/subar?label=download&color=30d158)](https://github.com/yuvalezrati/subar/releases/latest)
+![macOS 12+](https://img.shields.io/badge/macOS-12%2B-1f2937)
+![Apple silicon and Intel](https://img.shields.io/badge/Apple%20silicon%20%2B%20Intel-universal-1f2937)
+[![MIT license](https://img.shields.io/badge/license-MIT-1f2937)](LICENSE)
+
+<img src="docs/menu.png" width="640" alt="Subar in the menu bar with its menu open: 132 mg/dL, in range, and a graph of the last hour">
+
+</div>
 
 Subar shows your latest reading and trend arrow in the menu bar, colored by range. Click it to see the details and a graph of the last hour. It reads from **Dexcom Share**, the same service the Dexcom Follow app uses, so it works with the official Dexcom app and with Loop.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/yuvalezrati/subar/main/get-subar.sh | bash
+```
 
 > **Not a medical device.** Subar is an unofficial tool that isn't affiliated with Dexcom. Readings can be delayed or missing. Always use your Dexcom app or receiver for alerts and treatment decisions.
 
 ## What you see
+
+<p align="center"><img src="docs/states.png" width="640" alt="The four menu bar states: in range, high, low and signal loss"></p>
 
 | Menu bar | Meaning |
 |---|---|
@@ -21,6 +40,12 @@ Click the menu bar item to see:
 - The current reading, trend arrow and change since the last reading
 - A **Last hour** graph. Hover over any dot to see that reading's time, value and trend
 - When the next check will happen, your Dexcom account, Sign Out, Settings, Refresh and Quit
+
+When a reading is late, Subar says so instead of showing a stale number as if it were live:
+
+<p align="center"><img src="docs/signal-loss.png" width="640" alt="The Signal loss menu: the last reading, its age and a hatched gap on the graph"></p>
+
+<sub>The pictures on this page are drawn by Subar's own code with demo readings, on an illustrated desktop.</sub>
 
 ## Install
 
@@ -37,6 +62,8 @@ It downloads the latest release, puts **Subar.app** in Applications and opens it
 1. Download **`Subar-<version>.pkg`** from the [latest release](https://github.com/yuvalezrati/subar/releases/latest).
 2. Double-click it and click through the installer. If macOS blocks it, see the warning section below.
 3. Subar installs into **Applications** and opens.
+
+<p align="center"><img src="docs/sign-in.png" width="640" alt="The Sign in to Dexcom panel under the menu bar item"></p>
 
 **Then sign in:** a **Sign in to Dexcom** panel opens under the menu bar item. Enter your Dexcom username (or email or phone) and password, choose your **region** (United States, Outside the US or Japan), and click **Sign In**.
 
