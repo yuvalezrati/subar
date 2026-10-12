@@ -10,9 +10,7 @@
 ![macOS 12+](https://img.shields.io/badge/macOS-12%2B-1f2937)
 [![MIT license](https://img.shields.io/badge/license-MIT-1f2937)](LICENSE)
 
-<img src="docs/menubar.png" width="640" alt="Close-up of the menu bar with Subar showing 132 and a steady arrow in green">
-
-<img src="docs/menu.png" width="640" alt="Subar in the menu bar with its menu open: 132 mg/dL, in range, and a graph of the last hour">
+<img src="docs/hero.png" width="640" alt="Subar in the menu bar with its menu open: 132 mg/dL, in range, and a graph of the last hour">
 
 </div>
 
@@ -32,13 +30,13 @@ To update, install the newer `.pkg`; you stay signed in. To uninstall, quit Suba
 
 ## What you see
 
-<p align="center"><img src="docs/states.png" width="640" alt="The four menu bar states: in range, high, low and signal loss"></p>
+<p align="center"><img src="docs/menu-bar-states.png" width="640" alt="The four menu bar states: in range, high, low and signal loss"></p>
 
 Green is in range (70–180 mg/dL by default), yellow is high and red is low. A hollow gray circle means you're not signed in.
 
 When a reading is late, Subar shows **Signal loss** with the last value and its age, instead of passing off an old number as live:
 
-<p align="center"><img src="docs/signal-loss.png" width="640" alt="The Signal loss menu: the last reading, its age and a hatched gap on the graph"></p>
+<p align="center"><img src="docs/signal-loss-menu.png" width="640" alt="The Signal loss menu: the last reading, its age and a hatched gap on the graph"></p>
 
 <sub>These pictures are drawn by Subar's own code with demo readings, on an illustrated desktop.</sub>
 
