@@ -42,18 +42,13 @@ When a reading is late, Subar shows **Signal loss** with the last value and its 
 
 ## Settings
 
-Click the settings button at the bottom of the panel and choose **Edit Settings File…** to edit `config.json`. Changes apply on the next refresh.
+Click the settings button at the bottom of the panel to choose mg/dL or mmol/L, what the menu bar shows, your target range and the urgent thresholds. Changes apply straight away.
 
-| Setting | Default | Options |
-|---|---|---|
-| `menuBarStyle` | `"number"` | `"number"`, `"dotNumber"` (dot and number) or `"dot"` (dot only) |
-| `units` | `"mg/dL"` | `"mg/dL"` or `"mmol/L"` |
-| `low` / `high` | `70` / `180` | Your target range, in mg/dL |
-| `urgentLow` / `urgentHigh` | `55` / `250` | Labeled "URGENT" in the panel |
+<p align="center"><img src="docs/settings.png" width="640" alt="The settings page: units, menu bar style, target range, urgent thresholds, Open at Login and Sign Out"></p>
 
 ## Privacy
 
-Your password is stored only in your Mac's Keychain, and Subar talks only to Dexcom's Share servers. **Sign Out of Dexcom**, under the settings button, removes the saved password. If Dexcom rejects the password, Subar stops trying so your account doesn't get locked.
+Your password is stored only in your Mac's Keychain, and Subar talks only to Dexcom's Share servers. **Sign Out** on the settings page removes the saved password. If Dexcom rejects the password, Subar stops trying so your account doesn't get locked.
 
 ## Troubleshooting
 

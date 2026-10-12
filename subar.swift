@@ -9,8 +9,8 @@
 // or red (low). When an expected reading doesn't arrive it switches to "Signal loss".
 // Click it for a panel with the details, a 1, 3 or 6 hour graph and stats for that period.
 //
-// Settings (units, thresholds, menu bar style) live in
-// ~/Library/Application Support/Subar/config.json and are re-read on every refresh.
+// Settings (units, thresholds, menu bar style) are changed from the panel's settings page.
+// They live in ~/Library/Application Support/Subar/config.json and are re-read on every refresh.
 //
 // Build the downloadable app:  ./scripts/build-app.sh   (makes dist/Subar.app and dist/Subar-<version>.pkg)
 // Developer build + run:       ./scripts/dev-install.sh
@@ -61,6 +61,9 @@ let LEGACY_CONFIG_URL = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent("Library/Application Support/GlucoseBar/config.json")
 
 let GRAPH_HOUR_CHOICES = [1, 3, 6]
+let MENU_BAR_STYLES: [(name: String, label: String)] = [
+    ("number", "Number"), ("dotNumber", "Dot and number"), ("dot", "Dot only"),
+]
 
 // MARK: - Fetch timing and signal loss
 //
@@ -747,6 +750,7 @@ struct DashboardModel {
     var nextCheck = ""
     var account = ""
     var openAtLogin: Bool?            // nil when Open at Login isn't available
+    var config = Config()             // what the settings page edits
 }
 
 /// The outlined "In range" / "High" / "Signal loss" label.
@@ -815,11 +819,70 @@ final class StatTile: NSView {
     }
 }
 
+/// A threshold on the settings page: shown in the chosen units, kept in mg/dL.
+final class ThresholdField: NSStackView {
+    var onChange: (() -> Void)?
+    private(set) var mgdl = 0.0
+    private var units = "mg/dL"
+    private let field = NSTextField()
+    private let stepper = NSStepper()
+    private var scale: Double { units == "mmol/L" ? 18.0 : 1.0 }
+
+    init(title: String) {
+        super.init(frame: .zero)
+        let label = NSTextField(labelWithString: title)
+        label.font = .systemFont(ofSize: 12)
+        field.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        field.alignment = .right
+        field.target = self
+        field.action = #selector(fieldChanged)
+        field.widthAnchor.constraint(equalToConstant: 46).isActive = true
+        field.setAccessibilityLabel(title)
+        stepper.target = self
+        stepper.action = #selector(stepperChanged)
+        stepper.controlSize = .small
+        orientation = .horizontal
+        spacing = 5
+        [label, field, stepper].forEach(addArrangedSubview)
+        setCustomSpacing(2, after: field)
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    func set(_ value: Double, units: String) {
+        self.units = units
+        mgdl = value
+        stepper.minValue = 20 / scale
+        stepper.maxValue = 400 / scale
+        stepper.increment = units == "mmol/L" ? 0.1 : 1
+        show()
+    }
+
+    private func show() {
+        field.stringValue = fmtBG(mgdl, units)
+        stepper.doubleValue = mgdl / scale
+    }
+
+    @objc private func fieldChanged() {
+        if let typed = Double(field.stringValue.replacingOccurrences(of: ",", with: ".")) {
+            mgdl = min(max(typed, stepper.minValue), stepper.maxValue) * scale
+        }
+        show()
+        onChange?()
+    }
+
+    @objc private func stepperChanged() {
+        mgdl = stepper.doubleValue * scale
+        show()
+        onChange?()
+    }
+}
+
 @MainActor
 final class DashboardViewController: NSViewController {
     var onRefresh: (() -> Void)?
     var onQuit: (() -> Void)?
-    var onEditSettings: (() -> Void)?
+    var onConfig: ((Config) -> Void)?
     var onSignOut: (() -> Void)?
     var onToggleOpenAtLogin: (() -> Void)?
     var onHours: ((Int) -> Void)?
@@ -842,6 +905,23 @@ final class DashboardViewController: NSViewController {
     private let outsideTile = StatTile(title: "Low · High")
     private let nextCheckLabel = NSTextField(labelWithString: "")
     private var dataViews: [NSView] = []
+
+    // Settings page: replaces the reading and graph while it's open.
+    private var showingSettings = false
+    private var shownConfig: Config?
+    private let rootStack = NSStackView()
+    private let mainStack = NSStackView()
+    private let settingsStack = NSStackView()
+    private let unitsSwitch = NSSegmentedControl(labels: ["mg/dL", "mmol/L"], trackingMode: .selectOne,
+                                                 target: nil, action: nil)
+    private let stylePopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let lowField = ThresholdField(title: "Low")
+    private let highField = ThresholdField(title: "High")
+    private let urgentLowField = ThresholdField(title: "Urgent low")
+    private let urgentHighField = ThresholdField(title: "Urgent high")
+    private let settingsError = NSTextField(wrappingLabelWithString: "")
+    private let openAtLoginBox = NSButton(checkboxWithTitle: "Open at Login", target: nil, action: nil)
+    private let accountLabel = NSTextField(labelWithString: "")
 
     override func loadView() {
         for (label, color) in [(warningLabel, NSColor.systemOrange), (messageLabel, .systemOrange),
@@ -875,25 +955,22 @@ final class DashboardViewController: NSViewController {
 
         let footer = row([nextCheckLabel, spacer(),
                           iconButton("arrow.clockwise", "Refresh", #selector(refresh)),
-                          iconButton("slider.horizontal.3", "Settings", #selector(showSettingsMenu(_:))),
+                          iconButton("slider.horizontal.3", "Settings", #selector(toggleSettings)),
                           iconButton("power", "Quit Subar", #selector(quit))])
 
         dataViews = [header, subtitleLabel, periodRow, graph, tiles]
-        let stack = NSStackView(views: [warningLabel, placeholderLabel, header, subtitleLabel, messageLabel,
-                                        hintLabel, periodRow, graph, tiles, divider, footer])
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 10
-        stack.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 10, right: 16)
-        stack.setCustomSpacing(2, after: header)
-        stack.setCustomSpacing(14, after: subtitleLabel)
-        stack.setCustomSpacing(6, after: periodRow)
-        stack.setCustomSpacing(6, after: divider)
-        for v in [warningLabel, placeholderLabel, header, messageLabel, hintLabel, periodRow, graph,
-                  tiles, divider, footer] as [NSView] {
-            v.widthAnchor.constraint(equalToConstant: contentWidth).isActive = true
-        }
+        fill(mainStack, [warningLabel, placeholderLabel, header, subtitleLabel, messageLabel,
+                         hintLabel, periodRow, graph, tiles])
+        mainStack.setCustomSpacing(2, after: header)
+        mainStack.setCustomSpacing(14, after: subtitleLabel)
+        mainStack.setCustomSpacing(6, after: periodRow)
         graph.heightAnchor.constraint(equalToConstant: graph.frame.height).isActive = true
+        buildSettings()
+
+        let stack = rootStack
+        fill(stack, [mainStack, settingsStack, divider, footer])
+        stack.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 10, right: 16)
+        stack.setCustomSpacing(6, after: divider)
         stack.translatesAutoresizingMaskIntoConstraints = false
 
         let container = NSView()
@@ -905,6 +982,79 @@ final class DashboardViewController: NSViewController {
             stack.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
         view = container
+    }
+
+    /// A vertical stack of full-width rows.
+    private func fill(_ stack: NSStackView, _ views: [NSView]) {
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 10
+        for v in views {
+            stack.addArrangedSubview(v)
+            v.widthAnchor.constraint(equalToConstant: contentWidth).isActive = true
+        }
+    }
+
+    private func buildSettings() {
+        let title = NSTextField(labelWithString: "Settings")
+        title.font = .systemFont(ofSize: 15, weight: .semibold)
+        let done = smallButton("Done", #selector(toggleSettings))
+        done.keyEquivalent = "\r"
+
+        unitsSwitch.target = self
+        unitsSwitch.action = #selector(settingsChanged)
+        stylePopup.addItems(withTitles: MENU_BAR_STYLES.map { $0.label })
+        stylePopup.target = self
+        stylePopup.action = #selector(settingsChanged)
+        for field in [lowField, highField, urgentLowField, urgentHighField] {
+            field.onChange = { [weak self] in self?.settingsChanged() }
+        }
+        let rangeCaption = NSTextField(labelWithString: "TARGET RANGE")
+        rangeCaption.font = .systemFont(ofSize: 11, weight: .semibold)
+        rangeCaption.textColor = .secondaryLabelColor
+        settingsError.font = .systemFont(ofSize: 11)
+        settingsError.textColor = .systemRed
+        settingsError.preferredMaxLayoutWidth = contentWidth
+        settingsError.isHidden = true
+
+        openAtLoginBox.target = self
+        openAtLoginBox.action = #selector(toggleOpenAtLogin)
+        accountLabel.font = .systemFont(ofSize: 11)
+        accountLabel.textColor = .secondaryLabelColor
+        accountLabel.lineBreakMode = .byTruncatingMiddle
+        accountLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let accountDivider = NSBox()
+        accountDivider.boxType = .separator
+
+        fill(settingsStack, [
+            row([title, spacer(), done]),
+            row([settingLabel("Units"), spacer(), unitsSwitch]),
+            row([settingLabel("Menu bar shows"), spacer(), stylePopup]),
+            rangeCaption,
+            row([lowField, spacer(), highField]),
+            row([urgentLowField, spacer(), urgentHighField]),
+            settingsError,
+            openAtLoginBox,
+            accountDivider,
+            row([accountLabel, spacer(), smallButton("Sign Out", #selector(signOut))]),
+        ])
+        settingsStack.setCustomSpacing(14, after: settingsStack.arrangedSubviews[0])
+        settingsStack.setCustomSpacing(14, after: settingsStack.arrangedSubviews[2])
+        settingsStack.setCustomSpacing(6, after: rangeCaption)
+    }
+
+    private func settingLabel(_ text: String) -> NSTextField {
+        let label = NSTextField(labelWithString: text)
+        label.font = .systemFont(ofSize: 13)
+        return label
+    }
+
+    private func smallButton(_ title: String, _ action: Selector) -> NSButton {
+        let button = NSButton(title: title, target: self, action: action)
+        button.bezelStyle = .rounded
+        button.controlSize = .small
+        button.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        return button
     }
 
     private func row(_ views: [NSView]) -> NSStackView {
@@ -947,6 +1097,22 @@ final class DashboardViewController: NSViewController {
         hintLabel.isHidden = m.hint == nil
         nextCheckLabel.stringValue = m.nextCheck
 
+        mainStack.isHidden = showingSettings
+        settingsStack.isHidden = !showingSettings
+        if m.config != shownConfig {   // not on every refresh, so typing isn't interrupted
+            shownConfig = m.config
+            unitsSwitch.selectedSegment = m.config.units == "mmol/L" ? 1 : 0
+            stylePopup.selectItem(at: MENU_BAR_STYLES.firstIndex { $0.name == m.config.menuBarStyle } ?? 0)
+            lowField.set(m.config.low, units: m.config.units)
+            highField.set(m.config.high, units: m.config.units)
+            urgentLowField.set(m.config.urgentLow, units: m.config.units)
+            urgentHighField.set(m.config.urgentHigh, units: m.config.units)
+            settingsError.isHidden = true
+        }
+        openAtLoginBox.isHidden = m.openAtLogin == nil
+        openAtLoginBox.state = m.openAtLogin == true ? .on : .off
+        accountLabel.stringValue = m.account
+
         if let value = m.value {
             let s = NSMutableAttributedString(string: value, attributes: [
                 .font: NSFont.monospacedDigitSystemFont(ofSize: 40, weight: .bold), .foregroundColor: m.valueColor])
@@ -975,8 +1141,13 @@ final class DashboardViewController: NSViewController {
             inRangeTile.set([(m.inRange, .systemGreen)])
             outsideTile.set([(m.lowShare, .systemRed), (" · ", .secondaryLabelColor), (m.highShare, .systemYellow)])
         }
+        resize()
+    }
+
+    /// The panel resizes to fit. Measured on the stack, which the window doesn't hold to its current size.
+    private func resize() {
         view.layoutSubtreeIfNeeded()
-        preferredContentSize = view.fittingSize   // the panel resizes to fit
+        preferredContentSize = rootStack.fittingSize
     }
 
     @objc private func periodChanged() {
@@ -985,34 +1156,39 @@ final class DashboardViewController: NSViewController {
 
     @objc private func refresh() { onRefresh?() }
     @objc private func quit() { onQuit?() }
-    @objc private func editSettings() { onEditSettings?() }
     @objc private func signOut() { onSignOut?() }
     @objc private func toggleOpenAtLogin() { onToggleOpenAtLogin?() }
 
-    /// The settings button opens a small menu with the less-used actions.
-    @objc private func showSettingsMenu(_ sender: NSButton) {
-        let menu = NSMenu()
-        menu.autoenablesItems = false
-        let account = NSMenuItem(title: model.account, action: nil, keyEquivalent: "")
-        account.isEnabled = false
-        menu.addItem(account)
-        menu.addItem(.separator())
-        if let on = model.openAtLogin {
-            let item = menuItem("Open at Login", #selector(toggleOpenAtLogin))
-            item.state = on ? .on : .off
-            menu.addItem(item)
-        }
-        menu.addItem(menuItem("Edit Settings File…", #selector(editSettings)))
-        menu.addItem(.separator())
-        menu.addItem(menuItem("Sign Out of Dexcom", #selector(signOut)))
-        let below = sender.isFlipped ? sender.bounds.height + 4 : -4
-        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: below), in: sender)
+    /// The reading comes back each time the panel opens.
+    func showMain() { showingSettings = false }
+
+    func showSettings() {
+        showingSettings = true
+        update(model)
     }
 
-    private func menuItem(_ title: String, _ selector: Selector) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: selector, keyEquivalent: "")
-        item.target = self
-        return item
+    @objc private func toggleSettings() {
+        showingSettings.toggle()
+        update(model)
+    }
+
+    /// Any control on the settings page changed: check the values and save them.
+    @objc private func settingsChanged() {
+        var cfg = model.config
+        cfg.units = unitsSwitch.selectedSegment == 1 ? "mmol/L" : "mg/dL"
+        cfg.menuBarStyle = MENU_BAR_STYLES[max(0, stylePopup.indexOfSelectedItem)].name
+        cfg.low = lowField.mgdl
+        cfg.high = highField.mgdl
+        cfg.urgentLow = urgentLowField.mgdl
+        cfg.urgentHigh = urgentHighField.mgdl
+        guard cfg.urgentLow < cfg.low, cfg.low < cfg.high, cfg.high < cfg.urgentHigh else {
+            settingsError.stringValue = "Not saved: keep urgent low below low, low below high, and high below urgent high."
+            settingsError.isHidden = false
+            resize()
+            return
+        }
+        settingsError.isHidden = true
+        onConfig?(cfg)
     }
 }
 
@@ -1050,9 +1226,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         dashPopover.contentViewController = dashboard
         dashboard.onRefresh = { [weak self] in self?.refresh() }
         dashboard.onQuit = { NSApp.terminate(nil) }
-        dashboard.onEditSettings = { [weak self] in
-            self?.dashPopover.performClose(nil)
-            self?.openSettings()
+        dashboard.onConfig = { [weak self] cfg in
+            try? self?.saveConfig(cfg)
+            self?.render()
         }
         dashboard.onSignOut = { [weak self] in
             self?.dashPopover.performClose(nil)
@@ -1264,6 +1440,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             dashPopover.performClose(nil)
             return
         }
+        dashboard.showMain()
         render()   // no network: just recompute ages from the data already fetched
         NSApp.activate(ignoringOtherApps: true)
         dashPopover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
@@ -1358,6 +1535,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         var model = DashboardModel()
         model.configError = configError
+        model.config = cfg
         model.now = now
         model.units = units
         model.hours = cfg.graphHours
@@ -1440,10 +1618,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: Actions
 
+    /// ⌘, : the settings page of the panel.
     @objc func openSettings() {
-        let textEdit = URL(fileURLWithPath: "/System/Applications/TextEdit.app")
-        NSWorkspace.shared.open([CONFIG_URL], withApplicationAt: textEdit,
-                                configuration: NSWorkspace.OpenConfiguration())
+        guard !needsLogin, authError == nil else { return }
+        if !dashPopover.isShown { statusItemClicked() }
+        dashboard.showSettings()
     }
 
     @objc func quit() {
