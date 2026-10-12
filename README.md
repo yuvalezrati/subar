@@ -10,6 +10,8 @@
 ![macOS 12+](https://img.shields.io/badge/macOS-12%2B-1f2937)
 [![MIT license](https://img.shields.io/badge/license-MIT-1f2937)](LICENSE)
 
+<img src="docs/menubar.png" width="640" alt="Close-up of the menu bar with Subar showing 132 and a steady arrow in green">
+
 <img src="docs/menu.png" width="640" alt="Subar in the menu bar with its menu open: 132 mg/dL, in range, and a graph of the last hour">
 
 </div>
