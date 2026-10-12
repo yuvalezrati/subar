@@ -26,7 +26,7 @@ Subar shows your latest reading and trend arrow in the menu bar, colored by rang
 
 **Before you start:** turn on **Share** in the Dexcom app and invite at least one follower (it can be yourself on a second email address). Subar needs macOS 12 or later.
 
-To update, install the newer `.pkg`; you stay signed in. To uninstall, quit Subar and drag it from Applications to the Trash.
+To update, install the newer `.pkg`; you stay signed in. After an update, macOS asks once whether Subar may use its saved password: enter your Mac password and click **Allow**. To uninstall, quit Subar and drag it from Applications to the Trash.
 
 ## What you see
 

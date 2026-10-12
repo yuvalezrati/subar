@@ -1357,7 +1357,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func refresh() {
         loadConfig()
         let user = config.dexcomUsername
-        guard !user.isEmpty, let password = Keychain.load(account: user) else {
+        // The Keychain is read only when a client is needed (at launch, or when the account
+        // changes), never on every refresh: each read can make macOS ask for permission.
+        if dexcom?.username != user || dexcom?.regionName != config.dexcomRegion {
+            dexcom = nil
+            if !user.isEmpty, let password = Keychain.load(account: user) {
+                // An item saved by an older build belongs to that build. Saving it again from
+                // this one means macOS doesn't ask the next time.
+                Keychain.save(password, account: user)
+                dexcom = DexcomClient(username: user, password: password, regionName: config.dexcomRegion)
+            }
+        }
+        guard dexcom != nil else {
             needsLogin = true
             last = nil
             lastFetchAt = nil
@@ -1375,9 +1386,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         needsLogin = false
         if authError != nil { stopFetching(); render(); return }   // paused until the user signs in again
 
-        if dexcom == nil || dexcom?.username != user || dexcom?.regionName != config.dexcomRegion {
-            dexcom = DexcomClient(username: user, password: password, regionName: config.dexcomRegion)
-        }
         guard let client = dexcom, !isLoading else { render(); return }
         isLoading = true
         Task {
