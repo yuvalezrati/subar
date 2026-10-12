@@ -10,11 +10,11 @@
 ![macOS 12+](https://img.shields.io/badge/macOS-12%2B-1f2937)
 [![MIT license](https://img.shields.io/badge/license-MIT-1f2937)](LICENSE)
 
-<img src="docs/hero.png" width="640" alt="Subar in the menu bar with its menu open: 132 mg/dL, in range, and a graph of the last hour">
+<img src="docs/panel.png" width="640" alt="Subar in the menu bar with its panel open: 132 mg/dL, in range, a graph of the last 3 hours and stats">
 
 </div>
 
-Subar shows your latest reading and trend arrow in the menu bar, colored by range. Click it for the details and a graph of the last hour. It reads from **Dexcom Share**, the service behind the Dexcom Follow app.
+Subar shows your latest reading and trend arrow in the menu bar, colored by range. Click it for the details, a graph of the last 1, 3 or 6 hours, and your average and time in range for that period. It reads from **Dexcom Share**, the service behind the Dexcom Follow app.
 
 > **Not a medical device.** Subar is unofficial and not affiliated with Dexcom. Readings can be delayed or missing. Always use your Dexcom app or receiver for alerts and treatment decisions.
 
@@ -36,24 +36,24 @@ Green is in range (70–180 mg/dL by default), yellow is high and red is low. A 
 
 When a reading is late, Subar shows **Signal loss** with the last value and its age, instead of passing off an old number as live:
 
-<p align="center"><img src="docs/signal-loss-menu.png" width="640" alt="The Signal loss menu: the last reading, its age and a hatched gap on the graph"></p>
+<p align="center"><img src="docs/signal-loss.png" width="640" alt="The Signal loss panel: the last reading, its age and a hatched gap on the graph"></p>
 
 <sub>These pictures are drawn by Subar's own code with demo readings, on an illustrated desktop.</sub>
 
 ## Settings
 
-Choose **Settings…** from the menu to edit `config.json`. Changes apply on the next refresh.
+Click the settings button at the bottom of the panel and choose **Edit Settings File…** to edit `config.json`. Changes apply on the next refresh.
 
 | Setting | Default | Options |
 |---|---|---|
 | `menuBarStyle` | `"number"` | `"number"`, `"dotNumber"` (dot and number) or `"dot"` (dot only) |
 | `units` | `"mg/dL"` | `"mg/dL"` or `"mmol/L"` |
 | `low` / `high` | `70` / `180` | Your target range, in mg/dL |
-| `urgentLow` / `urgentHigh` | `55` / `250` | Labeled "URGENT" in the menu |
+| `urgentLow` / `urgentHigh` | `55` / `250` | Labeled "URGENT" in the panel |
 
 ## Privacy
 
-Your password is stored only in your Mac's Keychain, and Subar talks only to Dexcom's Share servers. **Sign Out of Dexcom** in the menu removes the saved password. If Dexcom rejects the password, Subar stops trying so your account doesn't get locked.
+Your password is stored only in your Mac's Keychain, and Subar talks only to Dexcom's Share servers. **Sign Out of Dexcom**, under the settings button, removes the saved password. If Dexcom rejects the password, Subar stops trying so your account doesn't get locked.
 
 ## Troubleshooting
 

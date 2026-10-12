@@ -7,7 +7,7 @@
 //
 // The menu bar shows the number and trend arrow, colored green (in range), yellow (high)
 // or red (low). When an expected reading doesn't arrive it switches to "Signal loss".
-// Click it for details and the last hour.
+// Click it for a panel with the details, a 1, 3 or 6 hour graph and stats for that period.
 //
 // Settings (units, thresholds, menu bar style) live in
 // ~/Library/Application Support/Subar/config.json and are re-read on every refresh.
@@ -32,6 +32,7 @@ struct Config: Codable, Equatable {
     var low = 70.0
     var high = 180.0
     var urgentHigh = 250.0
+    var graphHours = 3                // set by the 1h / 3h / 6h switch in the panel
 
     init() {}
 
@@ -47,6 +48,8 @@ struct Config: Codable, Equatable {
         low = try c.decodeIfPresent(Double.self, forKey: .low) ?? d.low
         high = try c.decodeIfPresent(Double.self, forKey: .high) ?? d.high
         urgentHigh = try c.decodeIfPresent(Double.self, forKey: .urgentHigh) ?? d.urgentHigh
+        let hours = try c.decodeIfPresent(Int.self, forKey: .graphHours) ?? d.graphHours
+        graphHours = GRAPH_HOUR_CHOICES.contains(hours) ? hours : d.graphHours
     }
 }
 
@@ -56,6 +59,8 @@ let CONFIG_URL = CONFIG_DIR.appendingPathComponent("config.json")
 // Settings from before the rename (GlucoseBar) are copied over on first launch.
 let LEGACY_CONFIG_URL = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent("Library/Application Support/GlucoseBar/config.json")
+
+let GRAPH_HOUR_CHOICES = [1, 3, 6]
 
 // MARK: - Fetch timing and signal loss
 //
@@ -186,7 +191,7 @@ func signalLossImage(_ color: NSColor, pointSize: CGFloat) -> NSImage? {
     return image
 }
 
-// MARK: - Last-hour graph (hover a dot to see that reading)
+// MARK: - Graph of the last 1, 3 or 6 hours (hover a dot to see that reading)
 
 final class GraphView: NSView {
     struct Point {
@@ -201,10 +206,11 @@ final class GraphView: NSView {
     var low = 70.0
     var high = 180.0
     var units = "mg/dL"
+    var hours = 1               // how far back the graph goes
     var gapFrom: Date?          // signal loss: shade from the last reading up to now
     private var hovered: Int?
 
-    private let inset: CGFloat = 14        // matches the menu's text inset
+    private let inset: CGFloat = 6         // room for the dots at the edges
     private let readoutHeight: CGFloat = 22
     private let axisHeight: CGFloat = 18
 
@@ -230,7 +236,7 @@ final class GraphView: NSView {
     }
 
     private func x(_ date: Date) -> CGFloat {
-        let f = 1 - min(max(now.timeIntervalSince(date) / 3600, 0), 1)
+        let f = 1 - min(max(now.timeIntervalSince(date) / (Double(hours) * 3600), 0), 1)
         return plot.minX + CGFloat(f) * plot.width
     }
 
@@ -300,13 +306,13 @@ final class GraphView: NSView {
         }
 
         // Axis labels
-        NSAttributedString(string: "60 min ago", attributes: secondary)
+        NSAttributedString(string: hours == 1 ? "60 min ago" : "\(hours) h ago", attributes: secondary)
             .draw(at: NSPoint(x: plot.minX, y: bounds.height - axisHeight + 2))
         let nowLabel = NSAttributedString(string: "now", attributes: secondary)
         nowLabel.draw(at: NSPoint(x: plot.maxX - nowLabel.size().width, y: bounds.height - axisHeight + 2))
 
         guard !points.isEmpty else {
-            NSAttributedString(string: "No readings in the last hour", attributes: secondary)
+            NSAttributedString(string: "No readings in this period", attributes: secondary)
                 .draw(at: NSPoint(x: inset, y: 2))
             return
         }
@@ -324,7 +330,9 @@ final class GraphView: NSView {
 
         let selected = hovered ?? points.count - 1
         for (i, p) in points.enumerated() {
-            let r: CGFloat = i == selected ? 5.5 : 3.5
+            // Longer periods pack more readings in, so the dots get smaller.
+            let small: CGFloat = hours == 1 ? 3.5 : hours == 3 ? 2.5 : 1.8
+            let r: CGFloat = i == selected ? small + 2 : small
             let dot = NSBezierPath(ovalIn: NSRect(x: x(p.date) - r, y: y(p.value) - r, width: r * 2, height: r * 2))
             p.color.setFill()
             dot.fill()
@@ -505,7 +513,7 @@ final class DexcomClient {
     }
 
     /// Latest readings, newest first. Logs in (again) when there's no valid session.
-    func readings(minutes: Int = 185, maxCount: Int = 37) async throws -> Snapshot {
+    func readings(minutes: Int = 365, maxCount: Int = 73) async throws -> Snapshot {
         if sessionId == nil { try await login() }
         do {
             return try await fetch(minutes: minutes, maxCount: maxCount)
@@ -711,10 +719,307 @@ final class LoginViewController: NSViewController {
     }
 }
 
+// MARK: - Dashboard panel (drops down from the menu bar item)
+
+/// Everything the panel shows, worked out by the app delegate.
+struct DashboardModel {
+    var configError: String?
+    var placeholder: String?          // shown instead of the reading while there's no data
+    var value: String?
+    var valueColor = NSColor.labelColor
+    var arrow = ""
+    var units = "mg/dL"
+    var subtitle = ""
+    var state = ""
+    var stateColor = NSColor.systemGreen
+    var message: String?              // couldn't reach Dexcom
+    var hint: String?                 // signal loss advice
+    var points: [GraphView.Point] = []
+    var now = Date()
+    var hours = 3
+    var low = 70.0
+    var high = 180.0
+    var gapFrom: Date?
+    var average = "–"
+    var inRange = "–"
+    var lowShare = "–"
+    var highShare = "–"
+    var nextCheck = ""
+    var account = ""
+    var openAtLogin: Bool?            // nil when Open at Login isn't available
+}
+
+/// The outlined "In range" / "High" / "Signal loss" label.
+final class PillView: NSView {
+    var text = "" { didSet { invalidateIntrinsicContentSize(); needsDisplay = true } }
+    var color = NSColor.systemGreen { didSet { needsDisplay = true } }
+
+    private var attributed: NSAttributedString {
+        NSAttributedString(string: text, attributes: [
+            .font: NSFont.systemFont(ofSize: 12, weight: .semibold), .foregroundColor: color])
+    }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: ceil(attributed.size().width) + 20, height: 22)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 11, yRadius: 11)
+        path.lineWidth = 1
+        color.setStroke()
+        path.stroke()
+        let s = attributed
+        s.draw(at: NSPoint(x: (bounds.width - s.size().width) / 2, y: (bounds.height - s.size().height) / 2))
+    }
+}
+
+/// One of the three stat boxes under the graph.
+final class StatTile: NSView {
+    private let valueLabel = NSTextField(labelWithString: "–")
+
+    init(title: String) {
+        super.init(frame: .zero)
+        let titleLabel = NSTextField(labelWithString: title)
+        titleLabel.font = .systemFont(ofSize: 11)
+        titleLabel.textColor = .secondaryLabelColor
+        let stack = NSStackView(views: [titleLabel, valueLabel])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 2
+        stack.edgeInsets = NSEdgeInsets(top: 9, left: 10, bottom: 9, right: 10)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: topAnchor),
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            stack.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    /// Parts are drawn side by side, each in its own color.
+    func set(_ parts: [(String, NSColor)]) {
+        let s = NSMutableAttributedString()
+        for (text, color) in parts {
+            s.append(NSAttributedString(string: text, attributes: [
+                .font: NSFont.monospacedDigitSystemFont(ofSize: 17, weight: .semibold), .foregroundColor: color]))
+        }
+        valueLabel.attributedStringValue = s
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.labelColor.withAlphaComponent(0.06).setFill()
+        NSBezierPath(roundedRect: bounds, xRadius: 8, yRadius: 8).fill()
+    }
+}
+
+@MainActor
+final class DashboardViewController: NSViewController {
+    var onRefresh: (() -> Void)?
+    var onQuit: (() -> Void)?
+    var onEditSettings: (() -> Void)?
+    var onSignOut: (() -> Void)?
+    var onToggleOpenAtLogin: (() -> Void)?
+    var onHours: ((Int) -> Void)?
+
+    private var model = DashboardModel()
+    private let contentWidth: CGFloat = 308
+    private let warningLabel = NSTextField(wrappingLabelWithString: "")
+    private let placeholderLabel = NSTextField(wrappingLabelWithString: "")
+    private let valueLabel = NSTextField(labelWithString: "")
+    private let pill = PillView()
+    private let subtitleLabel = NSTextField(labelWithString: "")
+    private let messageLabel = NSTextField(wrappingLabelWithString: "")
+    private let hintLabel = NSTextField(wrappingLabelWithString: "")
+    private let periodLabel = NSTextField(labelWithString: "")
+    private let periodSwitch = NSSegmentedControl(labels: GRAPH_HOUR_CHOICES.map { "\($0)h" },
+                                                  trackingMode: .selectOne, target: nil, action: nil)
+    private let graph = GraphView(width: 308)
+    private let averageTile = StatTile(title: "Average")
+    private let inRangeTile = StatTile(title: "In range")
+    private let outsideTile = StatTile(title: "Low · High")
+    private let nextCheckLabel = NSTextField(labelWithString: "")
+    private var dataViews: [NSView] = []
+
+    override func loadView() {
+        for (label, color) in [(warningLabel, NSColor.systemOrange), (messageLabel, .systemOrange),
+                               (hintLabel, .secondaryLabelColor), (placeholderLabel, .labelColor)] {
+            label.font = .systemFont(ofSize: label === placeholderLabel ? 13 : 11)
+            label.textColor = color
+            label.preferredMaxLayoutWidth = contentWidth
+        }
+        subtitleLabel.font = .systemFont(ofSize: 12)
+        subtitleLabel.textColor = .secondaryLabelColor
+        periodLabel.font = .systemFont(ofSize: 11, weight: .semibold)
+        periodLabel.textColor = .secondaryLabelColor
+        nextCheckLabel.font = .systemFont(ofSize: 11)
+        nextCheckLabel.textColor = .secondaryLabelColor
+
+        let header = row([valueLabel, spacer(), pill])
+        header.alignment = .centerY
+
+        periodSwitch.controlSize = .small
+        periodSwitch.target = self
+        periodSwitch.action = #selector(periodChanged)
+        let periodRow = row([periodLabel, spacer(), periodSwitch])
+
+        let tiles = NSStackView(views: [averageTile, inRangeTile, outsideTile])
+        tiles.orientation = .horizontal
+        tiles.distribution = .fillEqually
+        tiles.spacing = 8
+
+        let divider = NSBox()
+        divider.boxType = .separator
+
+        let footer = row([nextCheckLabel, spacer(),
+                          iconButton("arrow.clockwise", "Refresh", #selector(refresh)),
+                          iconButton("slider.horizontal.3", "Settings", #selector(showSettingsMenu(_:))),
+                          iconButton("power", "Quit Subar", #selector(quit))])
+
+        dataViews = [header, subtitleLabel, periodRow, graph, tiles]
+        let stack = NSStackView(views: [warningLabel, placeholderLabel, header, subtitleLabel, messageLabel,
+                                        hintLabel, periodRow, graph, tiles, divider, footer])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 10
+        stack.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 10, right: 16)
+        stack.setCustomSpacing(2, after: header)
+        stack.setCustomSpacing(14, after: subtitleLabel)
+        stack.setCustomSpacing(6, after: periodRow)
+        stack.setCustomSpacing(6, after: divider)
+        for v in [warningLabel, placeholderLabel, header, messageLabel, hintLabel, periodRow, graph,
+                  tiles, divider, footer] as [NSView] {
+            v.widthAnchor.constraint(equalToConstant: contentWidth).isActive = true
+        }
+        graph.heightAnchor.constraint(equalToConstant: graph.frame.height).isActive = true
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        let container = NSView()
+        container.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: container.topAnchor),
+            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            stack.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
+        view = container
+    }
+
+    private func row(_ views: [NSView]) -> NSStackView {
+        let stack = NSStackView(views: views)
+        stack.orientation = .horizontal
+        stack.spacing = 6
+        return stack
+    }
+
+    private func spacer() -> NSView {
+        let v = NSView()
+        v.setContentHuggingPriority(NSLayoutConstraint.Priority(1), for: .horizontal)
+        return v
+    }
+
+    private func iconButton(_ symbol: String, _ label: String, _ action: Selector) -> NSButton {
+        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)) ?? NSImage()
+        let button = NSButton(image: image, target: self, action: action)
+        button.isBordered = false
+        button.contentTintColor = .labelColor
+        button.toolTip = label
+        button.setAccessibilityLabel(label)
+        button.widthAnchor.constraint(equalToConstant: 30).isActive = true
+        button.heightAnchor.constraint(equalToConstant: 28).isActive = true
+        return button
+    }
+
+    func update(_ m: DashboardModel) {
+        _ = view   // make sure the view is built
+        model = m
+        warningLabel.stringValue = m.configError.map { "⚠︎ \($0)" } ?? ""
+        warningLabel.isHidden = m.configError == nil
+        placeholderLabel.stringValue = m.placeholder ?? ""
+        placeholderLabel.isHidden = m.value != nil
+        dataViews.forEach { $0.isHidden = m.value == nil }
+        messageLabel.stringValue = m.message.map { "⚠︎ \($0)" } ?? ""
+        messageLabel.isHidden = m.message == nil
+        hintLabel.stringValue = m.hint ?? ""
+        hintLabel.isHidden = m.hint == nil
+        nextCheckLabel.stringValue = m.nextCheck
+
+        if let value = m.value {
+            let s = NSMutableAttributedString(string: value, attributes: [
+                .font: NSFont.monospacedDigitSystemFont(ofSize: 40, weight: .bold), .foregroundColor: m.valueColor])
+            if !m.arrow.isEmpty {
+                s.append(NSAttributedString(string: " " + m.arrow, attributes: [
+                    .font: NSFont.systemFont(ofSize: 22), .foregroundColor: NSColor.labelColor]))
+            }
+            s.append(NSAttributedString(string: "  " + m.units, attributes: [
+                .font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor.secondaryLabelColor]))
+            valueLabel.attributedStringValue = s
+            pill.text = m.state
+            pill.color = m.stateColor
+            subtitleLabel.stringValue = m.subtitle
+
+            periodLabel.stringValue = m.hours == 1 ? "LAST HOUR" : "LAST \(m.hours) HOURS"
+            periodSwitch.selectedSegment = GRAPH_HOUR_CHOICES.firstIndex(of: m.hours) ?? 1
+            graph.now = m.now
+            graph.hours = m.hours
+            graph.low = m.low
+            graph.high = m.high
+            graph.units = m.units
+            graph.gapFrom = m.gapFrom
+            graph.points = m.points
+
+            averageTile.set([(m.average, .labelColor)])
+            inRangeTile.set([(m.inRange, .systemGreen)])
+            outsideTile.set([(m.lowShare, .systemRed), (" · ", .secondaryLabelColor), (m.highShare, .systemYellow)])
+        }
+        view.layoutSubtreeIfNeeded()
+        preferredContentSize = view.fittingSize   // the panel resizes to fit
+    }
+
+    @objc private func periodChanged() {
+        onHours?(GRAPH_HOUR_CHOICES[max(0, periodSwitch.selectedSegment)])
+    }
+
+    @objc private func refresh() { onRefresh?() }
+    @objc private func quit() { onQuit?() }
+    @objc private func editSettings() { onEditSettings?() }
+    @objc private func signOut() { onSignOut?() }
+    @objc private func toggleOpenAtLogin() { onToggleOpenAtLogin?() }
+
+    /// The settings button opens a small menu with the less-used actions.
+    @objc private func showSettingsMenu(_ sender: NSButton) {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        let account = NSMenuItem(title: model.account, action: nil, keyEquivalent: "")
+        account.isEnabled = false
+        menu.addItem(account)
+        menu.addItem(.separator())
+        if let on = model.openAtLogin {
+            let item = menuItem("Open at Login", #selector(toggleOpenAtLogin))
+            item.state = on ? .on : .off
+            menu.addItem(item)
+        }
+        menu.addItem(menuItem("Edit Settings File…", #selector(editSettings)))
+        menu.addItem(.separator())
+        menu.addItem(menuItem("Sign Out of Dexcom", #selector(signOut)))
+        let below = sender.isFlipped ? sender.bounds.height + 4 : -4
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: below), in: sender)
+    }
+
+    private func menuItem(_ title: String, _ selector: Selector) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: selector, keyEquivalent: "")
+        item.target = self
+        return item
+    }
+}
+
 // MARK: - App
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var fetchTimer: Timer?
     private var nextFetchAt: Date?
@@ -730,7 +1035,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var needsLogin = false
     private var authError: String?          // set after Dexcom rejects the saved password; polling pauses
     private var didAutoPrompt = false
-    private let menu = NSMenu()
+    private let dashboard = DashboardViewController()
+    private let dashPopover = NSPopover()
     private var loginController: LoginViewController?
     private let loginPopover = NSPopover()
 
@@ -738,8 +1044,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.imagePosition = .imageOnly
         statusItem.button?.image = dotImage(.secondaryLabelColor, hollow: true)
-        menu.autoenablesItems = false
-        menu.delegate = self   // rebuilt when opened, so "x min ago" is always current
+        statusItem.button?.target = self
+        statusItem.button?.action = #selector(statusItemClicked)
+        dashPopover.behavior = .transient
+        dashPopover.contentViewController = dashboard
+        dashboard.onRefresh = { [weak self] in self?.refresh() }
+        dashboard.onQuit = { NSApp.terminate(nil) }
+        dashboard.onEditSettings = { [weak self] in
+            self?.dashPopover.performClose(nil)
+            self?.openSettings()
+        }
+        dashboard.onSignOut = { [weak self] in
+            self?.dashPopover.performClose(nil)
+            self?.signOut()
+        }
+        dashboard.onToggleOpenAtLogin = { [weak self] in self?.toggleOpenAtLogin() }
+        dashboard.onHours = { [weak self] hours in self?.setGraphHours(hours) }
         loginPopover.behavior = .transient   // closes when you click elsewhere
         loginPopover.animates = true
 
@@ -909,10 +1229,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    func menuNeedsUpdate(_ menu: NSMenu) {
-        render()   // no network: just recompute ages from the data already fetched
-    }
-
     // MARK: Sign-in
 
     /// Show the sign-in panel under the menu bar item.
@@ -937,9 +1253,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         loginController?.focus()
     }
 
-    /// While signed out, clicking the menu bar item opens/closes the sign-in panel.
+    /// Clicking the menu bar item opens/closes the panel, or the sign-in panel while signed out.
     @objc private func statusItemClicked() {
-        if loginPopover.isShown { loginPopover.performClose(nil) } else { showLogin() }
+        if needsLogin || authError != nil {
+            if loginPopover.isShown { loginPopover.performClose(nil) } else { showLogin() }
+            return
+        }
+        guard let button = statusItem.button else { return }
+        if dashPopover.isShown {
+            dashPopover.performClose(nil)
+            return
+        }
+        render()   // no network: just recompute ages from the data already fetched
+        NSApp.activate(ignoringOtherApps: true)
+        dashPopover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        dashPopover.contentViewController?.view.window?.makeKey()
+    }
+
+    private func setGraphHours(_ hours: Int) {
+        var cfg = config
+        cfg.graphHours = hours
+        try? saveConfig(cfg)
+        render()
     }
 
     private func didSignIn(user: String, password: String, region: String, client: DexcomClient) {
@@ -1007,76 +1342,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    private func headerItem(value: String, color: NSColor, arrowColor: NSColor = .labelColor,
-                            arrow: String, suffix: String) -> NSMenuItem {
-        let s = NSMutableAttributedString(string: value, attributes: [
-            .font: NSFont.monospacedDigitSystemFont(ofSize: 26, weight: .semibold), .foregroundColor: color])
-        if !arrow.isEmpty {
-            s.append(NSAttributedString(string: "  " + arrow, attributes: [
-                .font: NSFont.systemFont(ofSize: 17), .foregroundColor: arrowColor]))
-        }
-        if !suffix.isEmpty {
-            s.append(NSAttributedString(string: "  " + suffix, attributes: [
-                .font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor.secondaryLabelColor]))
-        }
-        let item = NSMenuItem(title: value, action: nil, keyEquivalent: "")
-        item.attributedTitle = s
-        return item
-    }
-
-    private func signalLossTitleItem() -> NSMenuItem {
-        let s = NSMutableAttributedString()
-        if let icon = signalLossImage(.systemOrange, pointSize: 15) {
-            let attachment = NSTextAttachment()
-            attachment.image = icon
-            s.append(NSAttributedString(attachment: attachment))
-            s.append(NSAttributedString(string: "  "))
-        }
-        s.append(NSAttributedString(string: "Signal loss", attributes: [
-            .font: NSFont.systemFont(ofSize: 17, weight: .semibold), .foregroundColor: NSColor.systemOrange]))
-        let item = NSMenuItem(title: "Signal loss", action: nil, keyEquivalent: "")
-        item.attributedTitle = s
-        return item
-    }
-
-    private func info(_ text: String, color: NSColor? = nil, font: NSFont? = nil) -> NSMenuItem {
-        let item = NSMenuItem(title: text, action: nil, keyEquivalent: "")
-        var attrs: [NSAttributedString.Key: Any] = [.font: font ?? NSFont.menuFont(ofSize: 0)]
-        if let color { attrs[.foregroundColor] = color }
-        item.attributedTitle = NSAttributedString(string: text, attributes: attrs)
-        return item
-    }
-
     private func render() {
         let cfg = config
         let units = cfg.units
         let now = Date()
-        menu.removeAllItems()
-        let small = NSFont.menuFont(ofSize: 11)
-        let caption = NSFont.systemFont(ofSize: 11, weight: .semibold)
         let gray = NSColor.secondaryLabelColor
-
-        if let configError {
-            menu.addItem(info("⚠︎ \(configError)", color: .systemOrange))
-        }
 
         // Not signed in, or the saved password stopped working: the item opens the sign-in panel.
         if needsLogin || authError != nil {
             setStatus(color: gray, text: nil, hollow: true)
             statusItem.button?.setAccessibilityLabel("Subar: sign in to Dexcom")
-            statusItem.menu = nil
-            statusItem.button?.target = self
-            statusItem.button?.action = #selector(statusItemClicked)
+            dashPopover.performClose(nil)
             return
         }
-        statusItem.menu = menu
-        statusItem.button?.action = nil
+
+        var model = DashboardModel()
+        model.configError = configError
+        model.now = now
+        model.units = units
+        model.hours = cfg.graphHours
+        model.low = cfg.low
+        model.high = cfg.high
+        model.account = "Dexcom: \(cfg.dexcomUsername) (\(DexcomRegion.named(cfg.dexcomRegion).label))"
+        model.nextCheck = nextFetchAt.map { "Next check at \(fmtClock($0, seconds: true))" } ?? ""
+        if isAppBundle, #available(macOS 13.0, *) {
+            model.openAtLogin = SMAppService.mainApp.status == .enabled
+        }
+        defer { dashboard.update(model) }
 
         guard let snap = last, let latest = snap.readings.first else {
             setStatus(color: gray, text: nil, hollow: true)
             statusItem.button?.setAccessibilityLabel("Glucose: no data")
-            menu.addItem(info(lastError.map { "Couldn't load data: \($0)" } ?? "Loading…"))
-            addFooter(to: menu)
+            model.placeholder = lastError.map { "Couldn't load data: \($0)" } ?? "Loading…"
             return
         }
 
@@ -1090,104 +1387,66 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let (state, color) = rangeState(bg, cfg)
         let signalLoss = isSignalLoss
 
+        model.value = fmtBG(bg, units)
+        model.arrow = arrow
         if signalLoss {
             // Menu bar: gray "no signal" icon + last value and its age
             setStatus(color: gray, text: "\(fmtBG(bg, units)) · \(minutes)m", signalLoss: true)
             statusItem.button?.setAccessibilityLabel(
                 "Signal loss. Last reading \(fmtBG(bg, units)) \(units), \(minutes) minutes ago")
-
-            menu.addItem(signalLossTitleItem())
-            menu.addItem(info("No new reading since \(fmtClock(latest.date)) · expected at "
-                              + fmtClock(latest.date.addingTimeInterval(READING_INTERVAL)),
-                              color: gray))
-            menu.addItem(info("LAST READING", color: gray, font: caption))
-            menu.addItem(headerItem(value: fmtBG(bg, units), color: gray, arrowColor: gray, arrow: arrow,
-                                    suffix: "\(units) · \(fmtAge(age))"))
+            model.valueColor = gray
+            model.state = "Signal loss"
+            model.stateColor = .systemOrange
+            model.subtitle = "No new reading since \(fmtClock(latest.date))  ·  \(fmtAge(age))"
+            model.hint = "Keep your phone near you with the Dexcom app open. "
+                + "Missed readings fill in when the signal returns."
+            model.gapFrom = latest.date
         } else {
             let barText = "\(fmtBG(bg, units)) \(arrow)".trimmingCharacters(in: .whitespaces)
             setStatus(color: color, text: barText)
             statusItem.button?.setAccessibilityLabel("Glucose \(fmtBG(bg, units)) \(units), \(trendText), \(state)")
-
+            model.valueColor = color
+            model.state = state
+            model.stateColor = color
             let deltaText = fmtDelta(delta, units)
-            menu.addItem(headerItem(value: fmtBG(bg, units), color: color, arrow: arrow,
-                                    suffix: deltaText.isEmpty ? "" : "\(deltaText) \(units)"))
-            menu.addItem(info("\(state)  ·  \(fmtAge(age))", color: gray))
+            model.subtitle = (deltaText.isEmpty ? "" : "\(deltaText) \(units)  ·  ") + fmtAge(age)
         }
         if let err = lastError {
-            menu.addItem(info("⚠︎ Couldn't reach Dexcom: \(err)", color: .systemOrange))
+            model.message = "Couldn't reach Dexcom: \(err)"
         }
 
-        // Last hour, as a graph you can hover
-        menu.addItem(.separator())
-        menu.addItem(info("LAST HOUR", color: gray, font: caption))
-        let hour = snap.readings.filter { now.timeIntervalSince($0.date) <= 3600 }.reversed()  // oldest first
-        let all = Array(snap.readings.reversed())
-        var points: [GraphView.Point] = []
-        for r in hour {
+        // The chosen period, as a graph you can hover, and its stats
+        let span = Double(cfg.graphHours) * 3600
+        let period = snap.readings.filter { now.timeIntervalSince($0.date) <= span }
+        let all = Array(snap.readings.reversed())  // oldest first
+        for r in period.reversed() {
             let isLatest = r.date == latest.date
             var pointArrow = isLatest ? arrow : ""
             if !isLatest, let i = all.firstIndex(where: { $0.date == r.date }), i > 0 {
                 pointArrow = TREND_ARROWS[directionFromDelta(r.sgv - all[i - 1].sgv)] ?? ""
             }
-            points.append(GraphView.Point(date: r.date, value: r.sgv, arrow: pointArrow,
-                                          color: rangeState(r.sgv, cfg).1))
+            model.points.append(GraphView.Point(date: r.date, value: r.sgv, arrow: pointArrow,
+                                                color: rangeState(r.sgv, cfg).1))
         }
-        let graph = GraphView(width: 290)
-        graph.points = points
-        graph.now = now
-        graph.low = cfg.low
-        graph.high = cfg.high
-        graph.units = units
-        graph.gapFrom = signalLoss ? latest.date : nil
-        let graphItem = NSMenuItem()
-        graphItem.view = graph
-        menu.addItem(graphItem)
-
-        if signalLoss {
-            menu.addItem(info("Keep your phone near you with the Dexcom app open.", color: gray, font: small))
-            menu.addItem(info("Missed readings fill in when the signal returns.", color: gray, font: small))
+        if !period.isEmpty {
+            let count = Double(period.count)
+            func share(_ n: Int) -> String { "\(Int((Double(n) / count * 100).rounded()))%" }
+            model.average = fmtBG(period.reduce(0) { $0 + $1.sgv } / count, units)
+            model.inRange = share(period.filter { $0.sgv >= cfg.low && $0.sgv <= cfg.high }.count)
+            model.lowShare = share(period.filter { $0.sgv < cfg.low }.count)
+            model.highShare = share(period.filter { $0.sgv > cfg.high }.count)
         }
-
-        addFooter(to: menu)
-    }
-
-    private func addFooter(to menu: NSMenu) {
-        let small = NSFont.menuFont(ofSize: 11)
-        menu.addItem(.separator())
-        if let nextFetchAt {
-            menu.addItem(info("Next check at \(fmtClock(nextFetchAt, seconds: true))",
-                              color: .secondaryLabelColor, font: small))
-        }
-        let region = DexcomRegion.named(config.dexcomRegion).label
-        menu.addItem(info("Dexcom: \(config.dexcomUsername) (\(region))",
-                          color: .secondaryLabelColor, font: small))
-        menu.addItem(action("Sign Out of Dexcom", #selector(signOut)))
-        if isAppBundle, #available(macOS 13.0, *) {
-            let loginItem = action("Open at Login", #selector(toggleOpenAtLogin))
-            loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
-            menu.addItem(loginItem)
-        }
-        menu.addItem(action("Settings…", #selector(openSettings), key: ","))
-        menu.addItem(action("Refresh", #selector(refreshNow), key: "r"))
-        menu.addItem(.separator())
-        menu.addItem(action("Quit Subar", #selector(quit), key: "q"))
-    }
-
-    private func action(_ title: String, _ selector: Selector, key: String = "") -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: selector, keyEquivalent: key)
-        item.target = self
-        return item
     }
 
     // MARK: Actions
 
-    @objc private func openSettings() {
+    @objc func openSettings() {
         let textEdit = URL(fileURLWithPath: "/System/Applications/TextEdit.app")
         NSWorkspace.shared.open([CONFIG_URL], withApplicationAt: textEdit,
                                 configuration: NSWorkspace.OpenConfiguration())
     }
 
-    @objc private func quit() {
+    @objc func quit() {
         NSApp.terminate(nil)
     }
 }
@@ -1209,8 +1468,18 @@ struct SubarMain {
         app.delegate = delegate
         app.setActivationPolicy(.accessory)  // menu bar only, no Dock icon
 
-        // A hidden Edit menu so ⌘V / ⌘C / ⌘A work in the sign-in fields.
+        // Hidden menus: ⌘R / ⌘, / ⌘Q while the panel is open, and an Edit menu so
+        // ⌘V / ⌘C / ⌘A work in the sign-in fields.
         let mainMenu = NSMenu()
+        let appItem = NSMenuItem()
+        let appMenu = NSMenu(title: "Subar")
+        for (title, selector, key) in [("Refresh", #selector(AppDelegate.refreshNow), "r"),
+                                       ("Settings…", #selector(AppDelegate.openSettings), ","),
+                                       ("Quit Subar", #selector(AppDelegate.quit), "q")] {
+            appMenu.addItem(withTitle: title, action: selector, keyEquivalent: key).target = delegate
+        }
+        appItem.submenu = appMenu
+        mainMenu.addItem(appItem)
         let editItem = NSMenuItem()
         let edit = NSMenu(title: "Edit")
         edit.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
